@@ -1,0 +1,89 @@
+<?xml version="1.0"?>
+<launch>
+
+    <arg name="use_all" default="true" />
+    <arg name="use_mavros" default="$(arg use_all)" />
+    <arg name="use_mocap" default="$(arg use_all)" />
+    <arg name="use_camera" default="$(arg use_all)" />
+    <arg name="use_slam" default="$(arg use_all)" />
+    <arg name="use_monitor" default="$(arg use_all)" />
+
+    <!-- MAVROS -->
+    <arg name="fcu_device" default="/dev/serial/by-id/usb-3D_Robotics_PX4_FMU_v4.x_0-if00" />
+    <arg name="fcu_baud" default="57600" />
+    <arg name="fcu_url" default="$(arg fcu_device):$(arg fcu_baud)" />
+    <arg name="gcs_url" default="udp://@224.0.0.1:14550" />
+    <arg name="tgt_system" default="12" />
+    <arg name="tgt_component" default="1" />
+    <arg name="px4_config_yaml" default="$(env HOME)/px4_config.yaml" />
+    <arg name="send_mocap" default="true" />
+
+    <node pkg="mavros" type="mavros_node" name="mavros" respawn="true" clear_params="true" output="screen" if="$(arg use_mavros)">
+        <param name="fcu_url" value="$(arg fcu_url)" />
+        <param name="gcs_url" value="$(arg gcs_url)" />
+        <param name="target_system_id" value="$(arg tgt_system)" />
+        <param name="target_component_id" value="$(arg tgt_component)" />
+        <rosparam command="load" file="$(find mavros)/launch/px4_pluginlists.yaml" />
+        <rosparam command="load" file="$(find mavros)/launch/px4_config.yaml" />
+        <rosparam command="load" file="$(arg px4_config_yaml)" />
+
+        <remap to="/mocap/pose" from="~vision_pose/pose" if="$(arg send_mocap)" />
+    </node>
+
+    <!-- MOCAP -->
+    <arg name="mocap_user_id" default="$(arg tgt_system)" />
+    <node pkg="mocap_optitrack" type="mocap_node" name="mocap" respawn="true" if="$(arg use_mocap)">
+        <rosparam param="rigid_bodies/$(arg mocap_user_id)">{pose: '/mocap/pose', pose2d: '/mocap/pose2d', parent_frame_id: 'world', child_frame_id: 'mocap'}</rosparam>
+        <rosparam param="optitrack_config/multicast_address">'224.0.0.1'</rosparam>
+    </node>
+
+    <!-- Camera -->
+    <arg name="camera_info_url" default="file:///home/rpl/.ros/camera_info/rgb_PS1080_PrimeSense.yaml"/>
+    <include file="$(find openni2_launch)/launch/openni2.launch" if="$(arg use_camera)">
+        <arg name="depth_registration" value="true"/>
+        <arg name="rgb_camera_info_url" value="$(arg camera_info_url)"/>
+        <arg name="depth_camera_info_url" value="$(arg camera_info_url)"/>
+    </include>
+
+    <!-- SLAM -->
+    <group if="$(arg use_slam)">
+        <arg name="orbslam_root" default="$(find ORB_SLAM2)/../../.." />
+        <arg name="orbslam_vocabulary" default="$(arg orbslam_root)/Vocabulary/ORBvoc.txt" />
+        <arg name="orbslam_settings" default="$(arg orbslam_root)/Examples/ROS/ORB_SLAM2/Asus.yaml" />
+        <node name="orbslam" pkg="ORB_SLAM2" type="RGBD" args="$(arg orbslam_vocabulary) $(arg orbslam_settings)" output="screen" if="$(arg use_slam)">
+            <remap from="pose"        to="/slam/pose" />
+            <remap from="rgb_image"   to="/camera/rgb/image_rect_color"    />
+            <remap from="depth_image" to="/camera/depth/image_rect_meters" />
+        </node>
+    </group>
+
+    <!-- Camera to MAV publishing -->
+    <group if="$(arg use_slam)">
+        <arg name="camera_translation" default="0 0 0" />
+        <arg name="camera_quaternion" default="-0.03457752  0.15159128 -0.05475454  0.98631963" />
+        <arg name="send_slam" default="true" />
+        <node pkg="tf" type="static_transform_publisher" name="tf_world_slam_origin" args="$(arg camera_translation) $(arg camera_quaternion) world slam_origin 5" />
+        <node pkg="findtransform" type="pose_transformer" name="pose_transformer" args="world" if="$(arg send_slam)">
+            <remap from="in"  to="/slam/pose" />
+            <remap from="out" to="/mavros/vision_pose/pose" />
+        </node>
+    </group>
+
+    <!-- Resource monitoring -->
+    <arg name="machine_name" default="$(optenv HOSTNAME localhost)"/>
+    <group ns="$(arg machine_name)" if="$(arg use_monitor)">
+        <node name="cpu_monitor_$(arg machine_name)" pkg="system_monitor"
+              type="cpu_monitor.py" output="screen" respawn="true"/>
+        <!--node name="hdd_monitor_$(arg machine_name)" pkg="system_monitor"
+              type="hdd_monitor.py" output="screen" respawn="true"/-->
+        <node name="mem_monitor_$(arg machine_name)" pkg="system_monitor"
+              type="mem_monitor.py" output="screen" respawn="true"/>
+        <!--node name="ntp_monitor_$(arg machine_name)" pkg="system_monitor"
+              type="ntp_monitor.py" output="screen" respawn="true"/-->
+        <!--node name="net_monitor_$(arg machine_name)" pkg="system_monitor"
+              type="net_monitor.py" output="screen" respawn="true"/-->
+
+        <rosparam command="load" file="$(find system_monitor)/config/system_monitor.yaml"/>
+    </group>
+
+</launch>
